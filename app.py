@@ -45,10 +45,9 @@ logger = logging.getLogger("fatura-ocr-proxy")
 #  AYARLAR (ortam degiskenlerinden okunur - koda YAZILMAZ)
 # ════════════════════════════════════════════════════════
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o")
-OCR_TIMEOUT = 30.0
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
+MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions"
+OCR_TIMEOUT = 20.0
 
 # Gecerli istemci token'lari: "token": "aciklama/sahibi" seklinde.
 # Ortam degiskeninden virgulle ayrilmis "token1:isim1,token2:isim2" formatinda okunur.
@@ -73,8 +72,8 @@ CLIENT_TOKENS = _client_tokens_yukle()
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "20"))
 _istek_kayitlari = defaultdict(deque)  # token -> zaman damgalari deque'si
 
-if not OPENAI_API_KEY:
-    logger.warning("UYARI: OPENAI_API_KEY ortam degiskeni bos! Sunucu OCR isteklerini karsilayamaz.")
+if not MISTRAL_API_KEY:
+    logger.warning("UYARI: MISTRAL_API_KEY ortam degiskeni bos! Sunucu OCR isteklerini karsilayamaz.")
 if not CLIENT_TOKENS:
     logger.warning("UYARI: CLIENT_TOKENS ortam degiskeni bos! Hicbir istemci kimlik dogrulayamaz.")
 
@@ -114,7 +113,7 @@ async def ocr(
     isim = _token_dogrula(x_client_token)
     _rate_limit_kontrol(x_client_token)
 
-    if not OPENAI_API_KEY:
+    if not MISTRAL_API_KEY:
         raise HTTPException(status_code=503, detail="Sunucu yapilandirmasi eksik (API anahtari yok)")
 
     goruntu_bytes = await file.read()
@@ -124,12 +123,12 @@ async def ocr(
     img_b64 = base64.b64encode(goruntu_bytes).decode("utf-8")
 
     istek_govde = {
-        "model": OPENAI_MODEL,
+        "model": "pixtral-12b-2409",
         "messages": [{
             "role": "user",
             "content": [
+                {"type": "image_url", "image_url": f"data:image/png;base64,{img_b64}"},
                 {"type": "text", "text": "Bu fatura goruntusundeki tum metni aynen cikar. Hicbir sey ekleme, sadece gorseldeki metni yaz."},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
             ],
         }],
         "max_tokens": 2000,
@@ -138,20 +137,20 @@ async def ocr(
     try:
         async with httpx.AsyncClient(timeout=OCR_TIMEOUT) as client:
             r = await client.post(
-                OPENAI_URL,
+                MISTRAL_URL,
                 json=istek_govde,
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Authorization": f"Bearer {MISTRAL_API_KEY}",
                 },
             )
             r.raise_for_status()
             veri = r.json()
     except httpx.HTTPStatusError as e:
-        logger.error(f"OpenAI hata: {e.response.status_code} - {e.response.text[:300]}")
+        logger.error(f"Mistral hata: {e.response.status_code} - {e.response.text[:300]}")
         raise HTTPException(status_code=502, detail="OCR servisinde hata olustu")
     except Exception as e:
-        logger.error(f"OpenAI istek hatasi: {e}")
+        logger.error(f"Mistral istek hatasi: {e}")
         raise HTTPException(status_code=502, detail="OCR servisine ulasilamadi")
 
     metin = veri.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -166,4 +165,4 @@ async def ocr(
 
 @app.get("/health")
 async def health():
-    return {"durum": "calisiyor", "openai_yapilandirildi": bool(OPENAI_API_KEY)}
+    return {"durum": "calisiyor", "mistral_yapilandirildi": bool(MISTRAL_API_KEY)}
